@@ -1,10 +1,10 @@
 package org.apache.eventmesh.dashboard.core.cluster;
 
-import lombok.Data;
-
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+
+import lombok.Data;
 
 /**
  * eventmesh ClusterDO
@@ -27,7 +27,7 @@ public class ColonyDO {
     private Map<Long,ColonyDO> runtimeColonyDOList = new ConcurrentHashMap<>();
 
     // 只有 eventmesh 集群有这个点，其他没有。
-    private Map<Long,ColonyDO> storageColonyDOList = new ConcurrentHashMap<>();
+    private Map<Long,ColonyDO> storageBrokerColonyDOList = new ConcurrentHashMap<>();
 
     /**
      * A(nameserver cluster) a1 a2 a3

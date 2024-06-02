@@ -17,5 +17,6 @@
 
 package org.apache.eventmesh.dashboard.service.remoting;
 
-public interface RemotingIntegrationService extends AclRemotingService, ClientRemotingService, ConfigRemotingService, ConnectorRemotingService, GroupRemotingService, MetaRemotingService, OffsetRemotingService, SubscriptionRemotingService, TopicRemotingService, UserRemotingService {
+public interface IntegratedRemotingService
+    extends AclRemotingService, ClientRemotingService, ConfigRemotingService, ConnectorRemotingService, GroupRemotingService, MetaRemotingService, OffsetRemotingService, SubscriptionRemotingService, TopicRemotingService, UserRemotingService {
 }

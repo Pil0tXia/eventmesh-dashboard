@@ -13,7 +13,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * rocketmq 其他不同的是。 以nameservier 为主。那么可以多集群。一个eventmesh 可以操作多个集群
+ * rocketmq 其他不同的是。 以nameserver 为主。那么可以多集群。一个eventmesh 可以操作多个集群
  */
 public abstract class AbstractRocketMQRemotingService extends AbstractRemotingService {
 

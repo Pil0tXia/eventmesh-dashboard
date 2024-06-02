@@ -4,9 +4,12 @@ import org.apache.eventmesh.dashboard.common.enums.RemotingType;
 
 public @interface RemotingAction {
 
-   boolean support();
+    boolean support();
 
-   RemotingType substitution();
+    RemotingType substitution();
 
-   RemotingType retrySubstitution() default  RemotingType.STORAGE;
+    /**
+     * A fallback mechanism for the substitution method. Can be used in RemotingServiceHandler. Not used for now.
+     */
+    RemotingType retrySubstitution() default RemotingType.STORAGE;
 }

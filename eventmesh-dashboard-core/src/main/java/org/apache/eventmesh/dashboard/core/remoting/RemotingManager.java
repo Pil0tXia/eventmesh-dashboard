@@ -1,7 +1,5 @@
 package org.apache.eventmesh.dashboard.core.remoting;
 
-import lombok.Data;
-import lombok.Getter;
 import org.apache.eventmesh.dashboard.common.enums.ClusterTrusteeshipType;
 import org.apache.eventmesh.dashboard.common.enums.ClusterType;
 import org.apache.eventmesh.dashboard.common.enums.RemotingType;
@@ -21,7 +19,7 @@ import org.apache.eventmesh.dashboard.core.remoting.rocketmq.RocketMQOffsetRemot
 import org.apache.eventmesh.dashboard.core.remoting.rocketmq.RocketMQSubscriptionRemotingService;
 import org.apache.eventmesh.dashboard.core.remoting.rocketmq.RocketMQTopicRemotingService;
 import org.apache.eventmesh.dashboard.core.remoting.rocketmq.RocketMQUserRemotingService;
-import org.apache.eventmesh.dashboard.service.remoting.RemotingIntegrationService;
+import org.apache.eventmesh.dashboard.service.remoting.IntegratedRemotingService;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
@@ -40,6 +38,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import lombok.Data;
+import lombok.Getter;
 
 /**
  * @author hahaha
@@ -52,11 +52,10 @@ public class RemotingManager {
     /**
      * key clusterId
      */
-    private final Map<Long, RemotingWrapper> remotingWrapperMap = new ConcurrentHashMap<>();
+    private final Map<Long, RemotingServiceContext> remotingServiceContextMap = new ConcurrentHashMap<>();
 
     @Getter
-    private final Object proxyObject;
-
+    private final Object methodProxy;
 
     /**
      * Long key  is clusterId
@@ -70,17 +69,18 @@ public class RemotingManager {
         for (RemotingType remotingType : RemotingType.values()) {
             remotingServiceClasses.put(remotingType, new ArrayList<>());
         }
+
+        // register implementation services
         this.registerService(RemotingType.ROCKETMQ, RocketMQAclRemotingService.class, RocketMQConfigRemotingService.class, RocketMQClientRemotingService.class
                 , RocketMQGroupRemotingService.class, RocketMQOffsetRemotingService.class, RocketMQSubscriptionRemotingService.class
                 , RocketMQTopicRemotingService.class, RocketMQUserRemotingService.class);
-
         this.registerService(RemotingType.EVENT_MESH_RUNTIME, RocketMQAclRemotingService.class, RocketMQConfigRemotingService.class, RocketMQClientRemotingService.class
                 , RocketMQGroupRemotingService.class, RocketMQOffsetRemotingService.class, RocketMQSubscriptionRemotingService.class
                 , RocketMQTopicRemotingService.class, RocketMQUserRemotingService.class);
 
         RemotingServiceHandler remotingServiceHandler = new RemotingServiceHandler();
-        Class<?>[] clazzList = new Class[]{RemotingIntegrationService.class};
-        proxyObject = Proxy.newProxyInstance(this.getClass().getClassLoader(), clazzList, remotingServiceHandler);
+        Class<?>[] clazzList = new Class[]{IntegratedRemotingService.class}; // only 1 element
+        methodProxy = Proxy.newProxyInstance(this.getClass().getClassLoader(), clazzList, remotingServiceHandler);
     }
 
     public void registerService(RemotingType remotingType, Class<?>... clazzs) {
@@ -88,27 +88,26 @@ public class RemotingManager {
         Collections.addAll(serviceList, clazzs);
     }
 
-
     public void registerColony(ColonyDO colonyDO) throws Exception {
         if (loading.get() == true) {
             return;
         }
 
-        if (colonyDO.getClusterDO().getClusterInfo().getClusterType().isMainCluster()) {
+        if (colonyDO.getClusterDO().getClusterInfo().getClusterType().isEventMeshCluster()) {
             ClusterType clusterType = colonyDO.getClusterDO().getClusterInfo().getClusterType();
             RemotingType remotingType = clusterType.getRemotingType();
             List<Class<?>> remotingServersClassList = remotingServiceClasses.get(remotingType);
-            Map<Class<?>, Object> remotingServersMap = new HashMap<>();
+            Map<Class<?>, Object> remotingServiceCacheMap = new HashMap<>();
             for (Class<?> clazz : remotingServersClassList) {
                 AbstractRemotingService abstractRemotingService = (AbstractRemotingService) clazz.newInstance();
                 abstractRemotingService.setColonyDO(colonyDO);
                 abstractRemotingService.init();
-                remotingServersMap.put(clazz.getInterfaces()[0], abstractRemotingService);
+                remotingServiceCacheMap.put(clazz.getInterfaces()[0], abstractRemotingService);
             }
-            RemotingWrapper remotingWrapper = new RemotingWrapper();
-            remotingWrapper.setColonyDO(colonyDO);
-            remotingWrapper.setObject(remotingServersMap);
-            this.remotingWrapperMap.put(colonyDO.getClusterId(), remotingWrapper);
+            RemotingServiceContext remotingServiceContext = new RemotingServiceContext();
+            remotingServiceContext.setColonyDO(colonyDO);
+            remotingServiceContext.setRemotingServiceImplMap(remotingServiceCacheMap);
+            this.remotingServiceContextMap.put(colonyDO.getClusterId(), remotingServiceContext);
         } else {
             this.updateColony(colonyDO);
         }
@@ -116,42 +115,42 @@ public class RemotingManager {
     }
 
     public void updateColony(ColonyDO colonyDO) {
-        RemotingWrapper remotingWrapper = this.getMainRemotingWrapper(colonyDO);
+        RemotingServiceContext remotingServiceContext = this.getEventMeshRemotingServiceContext(colonyDO);
         /*
           There is a delay
          */
-        if (Objects.isNull(remotingWrapper)) {
+        if (Objects.isNull(remotingServiceContext)) {
             return;
         }
-        ColonyDO mainColonyDO = this.getMainColonyDO(colonyDO);
-        for (Object object : remotingWrapper.getObject().values()) {
+        ColonyDO mainColonyDO = this.getEventMeshColonyDO(colonyDO);
+        for (Object object : remotingServiceContext.getRemotingServiceImplMap().values()) {
             AbstractRemotingService abstractRemotingService = (AbstractRemotingService) object;
             abstractRemotingService.setColonyDO(mainColonyDO);
             abstractRemotingService.update();
         }
     }
 
-    public RemotingWrapper getMainRemotingWrapper(ColonyDO colonyDO) {
-        Long clusterId = colonyDO.getClusterDO().getClusterInfo().getClusterType().isMainCluster() ? colonyDO.getClusterId() : colonyDO.getSuperiorId();
+    public RemotingServiceContext getEventMeshRemotingServiceContext(ColonyDO colonyDO) {
+        Long clusterId = colonyDO.getClusterDO().getClusterInfo().getClusterType().isEventMeshCluster() ? colonyDO.getClusterId() : colonyDO.getSuperiorId();
         if (Objects.isNull(clusterId)) {
             return null;
         }
-        return remotingWrapperMap.get(clusterId);
+        return remotingServiceContextMap.get(clusterId);
     }
 
-    public ColonyDO getMainColonyDO(ColonyDO colonyDO) {
-        Long clusterId = colonyDO.getClusterDO().getClusterInfo().getClusterType().isMainCluster() ? colonyDO.getClusterId() : colonyDO.getSuperiorId();
+    public ColonyDO getEventMeshColonyDO(ColonyDO colonyDO) {
+        Long clusterId = colonyDO.getClusterDO().getClusterInfo().getClusterType().isEventMeshCluster() ? colonyDO.getClusterId() : colonyDO.getSuperiorId();
         return colonyDOMap.get(clusterId);
     }
 
     public void unregister(ColonyDO colonyDO) {
-        remotingWrapperMap.remove(colonyDO.getClusterId());
+        remotingServiceContextMap.remove(colonyDO.getClusterId());
     }
 
     public void loadingCompleted() throws Exception {
         this.loading.set(false);
         for (ColonyDO colonyDO : colonyDOMap.values()) {
-            if (colonyDO.getClusterDO().getClusterInfo().getClusterType().isMainCluster()) {
+            if (colonyDO.getClusterDO().getClusterInfo().getClusterType().isEventMeshCluster()) {
                 this.registerColony(colonyDO);
             }
         }
@@ -218,7 +217,7 @@ public class RemotingManager {
             } else if (Objects.equals(relationshipType.getAssemblyNodeType(), ClusterType.RUNTIME)) {
                 this.relationship(colonyDO, colonyDO.getRuntimeColonyDOList(), clusterRelationshipEntity);
             } else if (Objects.equals(relationshipType.getAssemblyNodeType(), ClusterType.STORAGE)) {
-                this.relationship(colonyDO, colonyDO.getStorageColonyDOList(), clusterRelationshipEntity);
+                this.relationship(colonyDO, colonyDO.getStorageBrokerColonyDOList(), clusterRelationshipEntity);
             }
         }
     }
@@ -234,29 +233,29 @@ public class RemotingManager {
         this.updateColony(colonyDO);
     }
 
-    public List<RemotingWrapper> getEventMeshClusterDO(ClusterTrusteeshipType... clusterTrusteeshipType) {
-        return this.filterer(ClusterType.EVENTMESH, clusterTrusteeshipType);
+    public List<RemotingServiceContext> getEventMeshClusterDO(ClusterTrusteeshipType... clusterTrusteeshipType) {
+        return this.filter(ClusterType.EVENTMESH, clusterTrusteeshipType);
     }
 
-    public List<RemotingWrapper> getMetaNacosClusterDO(ClusterTrusteeshipType... clusterTrusteeshipType) {
-        return this.filterer(ClusterType.EVENTMESH_META_ETCD, clusterTrusteeshipType);
+    public List<RemotingServiceContext> getMetaNacosClusterDO(ClusterTrusteeshipType... clusterTrusteeshipType) {
+        return this.filter(ClusterType.EVENTMESH_META_ETCD, clusterTrusteeshipType);
     }
 
-    public List<RemotingWrapper> getMetaEtcdClusterDO(ClusterTrusteeshipType... clusterTrusteeshipType) {
-        return this.filterer(ClusterType.EVENTMESH_META_NACOS, clusterTrusteeshipType);
+    public List<RemotingServiceContext> getMetaEtcdClusterDO(ClusterTrusteeshipType... clusterTrusteeshipType) {
+        return this.filter(ClusterType.EVENTMESH_META_NACOS, clusterTrusteeshipType);
     }
 
-    public List<RemotingWrapper> getRocketMQClusterDO(ClusterTrusteeshipType... clusterTrusteeshipType) {
-        return this.filterer(ClusterType.STORAGE_ROCKETMQ, clusterTrusteeshipType);
+    public List<RemotingServiceContext> getRocketMQClusterDO(ClusterTrusteeshipType... clusterTrusteeshipType) {
+        return this.filter(ClusterType.STORAGE_ROCKETMQ, clusterTrusteeshipType);
     }
-    public List<RemotingWrapper> getStorageCluster(ClusterTrusteeshipType... clusterTrusteeshipType) {
-        List<RemotingWrapper> list = new ArrayList<>();
+
+    public List<RemotingServiceContext> getStorageCluster(ClusterTrusteeshipType... clusterTrusteeshipType) {
+        List<RemotingServiceContext> list = new ArrayList<>();
         for(ClusterType clusterType : ClusterType.STORAGE_TYPES){
-            list.addAll(this.filterer(clusterType, clusterTrusteeshipType));
+            list.addAll(this.filter(clusterType, clusterTrusteeshipType));
         }
         return list;
     }
-
 
     public boolean isClusterTrusteeshipType(Long clusterId, ClusterTrusteeshipType clusterTrusteeshipType){
         ColonyDO colonyDO = this.colonyDOMap.get(clusterId  );
@@ -266,24 +265,25 @@ public class RemotingManager {
         return Objects.equals(colonyDO.getClusterDO().getClusterInfo().getTrusteeshipType() , clusterTrusteeshipType);
     }
 
-
-    private List<RemotingWrapper> filterer(ClusterType clusterType, ClusterTrusteeshipType... clusterTrusteeshipTypes) {
-        Set<ClusterTrusteeshipType> clusterTrusteeshipType = new HashSet<>();
-        clusterTrusteeshipType.addAll(Arrays.asList(clusterTrusteeshipTypes));
-        List<RemotingWrapper> remotingWrapperList = new ArrayList<>();
-        for (RemotingWrapper remotingWrapper : remotingWrapperMap.values()) {
-            ClusterMetadata clusterMetadata = remotingWrapper.getColonyDO().getClusterDO().getClusterInfo();
+    /**
+     * Return clusters with selected TrusteeType enabled.
+     */
+    private List<RemotingServiceContext> filter(ClusterType clusterType, ClusterTrusteeshipType... clusterTrusteeshipTypes) {
+        Set<ClusterTrusteeshipType> clusterTrusteeshipType = new HashSet<>(Arrays.asList(clusterTrusteeshipTypes));
+        List<RemotingServiceContext> remotingServiceContextList = new ArrayList<>();
+        for (RemotingServiceContext remotingServiceContext : remotingServiceContextMap.values()) {
+            ClusterMetadata clusterMetadata = remotingServiceContext.getColonyDO().getClusterDO().getClusterInfo();
             if (Objects.equals(clusterMetadata.getClusterType(), clusterType)) {
                 if (clusterTrusteeshipType.contains(clusterMetadata.getTrusteeshipType())) {
-                    remotingWrapperList.add(remotingWrapper);
+                    remotingServiceContextList.add(remotingServiceContext);
                 }
             }
         }
-        return remotingWrapperList;
+        return remotingServiceContextList;
     }
 
 
-    public <T> T request(RemotingRequestWrapper remotingRequestWrapper, List<RemotingWrapper> remotingWrapperList) {
+    public <T> T request(RemotingRequestWrapper remotingRequestWrapper, List<RemotingServiceContext> remotingServiceContextList) {
         List<Object> resultData = new ArrayList<>();
 
         Class<?> clazz = remotingRequestWrapper.getClass();
@@ -297,10 +297,10 @@ public class RemotingManager {
             globalRequestClass = (Class<GlobalRequest>)actualTypeArguments[1];
         }
         RemotingRequestWrapper<Object,Object>  remotingRequestWrapper1 = (RemotingRequestWrapper<Object,Object>)remotingRequestWrapper;
-        for (RemotingWrapper remotingWrapper : remotingWrapperList) {
+        for (RemotingServiceContext remotingServiceContext : remotingServiceContextList) {
             try {
                 GlobalRequest globalRequest = globalRequestClass.newInstance();
-                globalRequest.setClusterId(remotingWrapper.getColonyDO().getClusterId());
+                globalRequest.setClusterId(remotingServiceContext.getColonyDO().getClusterId());
                 GlobalResult<Object> globalResult = remotingRequestWrapper1.request(globalRequest,executeClass);
                 if(globalResult.getData() instanceof  List){
                     resultData.addAll((List<Object>)globalResult.getData());
@@ -322,12 +322,12 @@ public class RemotingManager {
     }
 
     @Data
-    public static class RemotingWrapper {
+    public static class RemotingServiceContext {
+
         private ColonyDO colonyDO;
 
-        private Map<Class<?>, Object> object = new HashMap<>();
+        private Map<Class<?>, Object> remotingServiceImplMap = new HashMap<>();
     }
-
 
     public class RemotingServiceHandler implements InvocationHandler {
 
@@ -337,29 +337,28 @@ public class RemotingManager {
             GlobalRequest globalRequest = (GlobalRequest) args[0];
             Long clusterId = globalRequest.getClusterId();
             // ClusterDO
-            RemotingWrapper remotingWrapper = remotingWrapperMap.get(clusterId);
+            RemotingServiceContext remotingServiceContext = remotingServiceContextMap.get(clusterId);
             // 完整执行对象
             Class<?> declaringClass = method.getDeclaringClass();
-            Object object = remotingWrapper.getObject().get(declaringClass);
-            if (Objects.isNull(object)) {
-
+            Object remotingServiceImpl = remotingServiceContext.getRemotingServiceImplMap().get(declaringClass);
+            if (Objects.isNull(remotingServiceImpl)) {
+                // TODO LOG
             }
 
-            Method currentMethod = object.getClass().getMethod(method.getName(), method.getParameterTypes());
+            Method currentMethod = remotingServiceImpl.getClass().getMethod(method.getName(), method.getParameterTypes());
             RemotingAction annotations = currentMethod.getAnnotation(RemotingAction.class);
             if (Objects.nonNull(annotations)) {
                 if (!annotations.support()) {
-                    ColonyDO colonyDO = remotingWrapper.getColonyDO();
-                    Map<Long, ColonyDO> colonyDOMap1 = colonyDO.getStorageColonyDOList();
+                    ColonyDO colonyDO = remotingServiceContext.getColonyDO();
+                    Map<Long, ColonyDO> colonyDOMap1 = colonyDO.getStorageBrokerColonyDOList();
                     for (ColonyDO c : colonyDOMap1.values()) {
-                        RemotingWrapper newRemotingWrapper = remotingWrapperMap.get(c.getClusterId());
-                        Object newObject = newRemotingWrapper.getObject().get(declaringClass);
+                        RemotingServiceContext newRemotingServiceContext = remotingServiceContextMap.get(c.getClusterId());
+                        Object newObject = newRemotingServiceContext.getRemotingServiceImplMap().get(declaringClass);
                         return method.invoke(newObject, args);
                     }
                 }
             }
-            return method.invoke(object, args);
-
+            return method.invoke(remotingServiceImpl, args);
         }
     }
 }

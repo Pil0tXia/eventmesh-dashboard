@@ -1,11 +1,14 @@
 package org.apache.eventmesh.dashboard.common.enums;
 
-import lombok.Getter;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import lombok.Getter;
+
+/**
+ * TODO Fix naming & add doc for its 5 members
+ */
 public enum ClusterType {
 
     DEFAULT(1),
@@ -53,7 +56,6 @@ public enum ClusterType {
 
     public static final List<ClusterType> STORAGE_TYPES = getStorage();
 
-
     private static List<ClusterType> getStorage(){
         List<ClusterType> list = new ArrayList<>();
         for(ClusterType clusterType : ClusterType.values()){
@@ -63,7 +65,6 @@ public enum ClusterType {
         }
         return list;
     }
-
 
     @Getter
     private ClusterType eventmeshNodeType;
@@ -83,8 +84,6 @@ public enum ClusterType {
     @Getter
     private int code;
 
-
-
     ClusterType(int code) {
         this.code = code;
     }
@@ -97,8 +96,7 @@ public enum ClusterType {
         this.remotingType = remotingType;
     }
 
-
-    public boolean isMainCluster(){
+    public boolean isEventMeshCluster(){
         return Objects.equals(this, ClusterType.EVENTMESH_CLUSTER ) || Objects.equals(this.assemblyNodeType, ClusterType.CLUSTER );
     }
 
@@ -109,9 +107,8 @@ public enum ClusterType {
                 || Objects.equals(this.getAssemblyNodeType(), ClusterType.CLUSTER);
     }
 
-    public boolean isSecondFloor() {
+    public boolean isSecondLayer() {
         return Objects.equals(eventmeshNodeType, ClusterType.STORAGE) ? (Objects.equals(assemblyNodeType, ClusterType.RUNTIME)
                 || Objects.equals(assemblyNodeType, ClusterType.META)) : false;
     }
-
 }
